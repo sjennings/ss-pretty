@@ -3,9 +3,11 @@
 # Chris Gadd
 # https://github.com/gaddman/ss-pretty
 # 2019-03-20
+# Modified by Scott Jennings 2022-05-26
 
 from __future__ import print_function
 import argparse
+import csv
 import re
 import select
 import signal
@@ -36,6 +38,7 @@ widths = {
     "timestamp": 12,
     "local": 21,  # 21 good for IPv4
     "peer": 21,  # 21 good for IPv4
+    "process": 20,
     "skmem": 60,
     "cong_alg": 8,
     "ts": 2,
@@ -80,7 +83,7 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.RawDescriptionHelpFormatter,
     description="Just like running 'ss -tmi', but with a columnar format",
     epilog="""Default fields to display are:
-    timestamp,local,peer,mss,rcvmss,advmss,rto,rtt,cwnd,ssthresh,bytes_acked,
+    timestamp,local,peer,process,mss,rcvmss,advmss,rto,rtt,cwnd,ssthresh,bytes_acked,
     unacked,retrans,send,pacing_rate,delivery_rate,busy,rcv_space,notsent
 
 Example, showing just data rates:
@@ -93,13 +96,14 @@ While running, press:
 parser.add_argument(
     "-d",
     help="Comma-separated list of fields to display (see ss output or man)",
-    default="timestamp,local,peer,mss,rcvmss,advmss,rto,rtt,cwnd,ssthresh,bytes_acked,unacked,retrans,send,pacing_rate,delivery_rate,busy,rcv_space,notsent",
+    default="timestamp,local,peer,process,mss,rcvmss,advmss,rto,rtt,cwnd,ssthresh,bytes_acked,unacked,retrans,send,pacing_rate,delivery_rate,busy,rcv_space,notsent",
 )
 parser.add_argument("-f", help="Filter (as used by ss)", type=str, default="")
 parser.add_argument(
     "-u", help="Update frequency (seconds, default=1)", type=float, default=1
 )
 parser.add_argument("-t", help="Time to run for (seconds, default=forever)", type=float)
+parser.add_argument("-csv", help="Output in CSV format", action="store_true")
 parser.add_argument("-v", help="Verbose", action="store_true")
 args = parser.parse_args()
 verbose = args.v
@@ -107,6 +111,7 @@ showfields = args.d
 filter = args.f
 frequency = args.u
 duration = args.t
+do_csv = args.csv
 
 # Verify fields
 for key in showfields.split(","):
@@ -125,10 +130,15 @@ def printHeader():
 
 printHeader()
 
-sscommand = ["ss", "-tmi", filter]
+sscommand = ["ss", "-p", "-tmi", filter]
 
 if duration is not None:
     endTime = time.time() + duration
+
+if do_csv:
+    csv_file = open("ss-pretty.csv", "w")
+    csv_writer = csv.writer(csv_file, delimiter=",")
+    csv_writer.writerow(showfields.split(","))
 
 while True:
     fields = {}
@@ -154,6 +164,12 @@ while True:
         ).groups()
         fields["local"] = local
         fields["peer"] = peer
+        # check for process name
+        process = re.search(r"(users:\(.*)", line)
+        if process:
+            fields["process"] = process.group()
+        else:
+            fields["process"] = ""
         # Kernel data
         line = next(output).decode()
         if verbose:
@@ -184,6 +200,10 @@ while True:
                 ),
                 end=" ",
             )
+        if do_csv:
+            csv_writer.writerow(
+                [fields.get(thisfield, "") for thisfield in showfields.split(",")]
+            )
         print("\r")
 
     if duration is not None and time.time() >= endTime:
@@ -199,5 +219,11 @@ while True:
             # toggle verbose mode
             verbose = not verbose
         elif char == "q" or char == "\x03":
+            if do_csv:
+                csv_file.close()
             # quit. \x03 = Ctrl-C
             sys.exit()
+
+# Close csv file if time expired
+if do_csv:
+    csv_file.close()
